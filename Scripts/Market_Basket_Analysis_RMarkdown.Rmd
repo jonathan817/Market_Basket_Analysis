@@ -1,0 +1,1103 @@
+---
+title: "Predicting Profitability using Market Basket Analysis"	
+subtitle: "Predicting Sales of Products Using R Algorithms"
+author: "JONATHAN AYALA GONZALEZ, KEYLA MENDEZ - For Blackwell Electronics "
+date: "June of 2019"
+output:
+  html_document:
+    fig_height: 5
+    fig_width: 7
+    number_sections: yes
+    theme: journal
+    toc: yes
+    toc_float: yes
+    toc_depth: 2
+  pdf_document:
+    toc: yes
+  word_document: default
+---
+
+```{r setup, include=FALSE}
+
+library(lattice)
+library(ggplot2)
+library(caret)
+library(mlbench)
+library(readr)
+library(C50)
+library(rpart)
+library(rpart.plot)
+library(class)
+library(dplyr)
+library(reshape2)
+library(scales)
+library(plotly)
+library(corrplot)
+library(Matrix)
+library(caTools)
+library(grid)
+library(arules)
+library(arulesViz)
+
+
+```
+
+
+The main target o predict the sales in four different product types while assessing the effects service and customer reviews have on sales. You'll be using Regression to build machine learning models for this analyses using a choice of two of three popular algorithms. Once you have determined which one works better on the provided data set, Danielle would like you to predict the sales of four product types from the new products list and prepare a report of your findings.
+
+******
+# Previous Analysis.
+******
+
+The data sets are charged into R.
+
+```{r,eval=TRUE,echo=FALSE}
+
+current_path = rstudioapi::getActiveDocumentContext()$path #save working directory
+setwd(dirname(current_path))
+setwd("..")
+
+setwd("~/UBIQUM/DATA ANALYTICS II/TASK_04/Market Basket Analysis/Datasets")
+
+# Carga del Dataset.
+
+orders_translated<- read.csv("~/Datasets/orders_translated.csv", sep=";")
+lineitems<- read.csv("lineitems.csv", sep=";")
+trans<- read.csv("trans.csv", sep=",", header = FALSE)
+
+trans <- trans[-1,]
+
+```
+
+
+******
+# 1st Epic: Data Quality Analyisis.
+******
+
+
+All orders that are no repeated more that once are removed from the lineitems data set.
+
+```{r,eval=TRUE,echo=FALSE}
+
+
+# %>% filter: means filter the groups that have nrows greater than 1 (n() >1)
+
+orders_dos_mas <- lineitems %>% group_by(id_order) %>% filter (n() > 1)
+
+# Amount of diferent orders: 48714.
+
+length(unique(orders_dos_mas$id_order))
+
+```
+
+As a result of the process carried out above, it turns out that the amount of diferent orders is 48714.
+
+Now, given that is known that the orders_translated data set has unique values, the data set is filtered by state of the order and its results assigned to the orders_completed data set.
+
+```{r,eval=TRUE,echo=FALSE}
+
+Orders_completed <- orders_translated %>% filter (state =="Completed")
+
+# Comparison between Orders_completed with orders_dos_mas. Length: 10453 
+
+length(which (Orders_completed$id_order %in% orders_dos_mas$id_order))
+
+```
+
+As a result of the process carried out above, it turns out that the orders with two or more products is 48714.
+
+
+```{r,eval=TRUE,echo=FALSE}
+
+# The next vector "which(orders_dos_mas$id_order %in% Orders_completed$id_order)" is assigned to a new element called "match". The result of the match is a vector with the positions where are located the elements in the order_dos_mas data set that has presence in the orders_completed data set. Example: (5,15,16,17) means that, in the orders_dos_mas data set, in the position 5, there is an element that is present in the orders_completed data set.
+
+match <- which(orders_dos_mas$id_order %in% Orders_completed$id_order)
+
+# Now, it is created the order_trans data set, which contains the orders organized by the Id_order in the orders_dos_mas data set.
+
+orders_trans <- orders_dos_mas [match,]
+
+length(unique(orders_trans$id_order))
+
+```
+
+
+Now, it will be checked if the total paid in the orders_translated data set correspond to the total unit price in lineitem.csv
+
+```{r,eval=TRUE,echo=FALSE}
+
+# Check if the total paid in the orders_translated data set correspond to the total unit price in lineitem.csv.####
+
+# To get it, it will be used the orders_trans data set instead of the lineitem dataset. That said, unit_price in orders_trans data set is transform from factor format to numeric format.
+
+orders_trans_2 <- orders_trans
+
+orders_trans_2$unit_price <- as.numeric(gsub(",", ".", gsub("\\.", "", orders_trans_2$unit_price)))
+
+total_paid_in_transaction <- orders_trans_2 %>% group_by(id_order) %>% mutate(paid=product_quantity*unit_price) %>% summarize (total_paid = sum(paid),number_of_items=n())
+
+comprobacion_precio <- full_join(orders_translated,total_paid_in_transaction, by= "id_order")
+
+
+# The column names is changed and the format is corrected for one of the columns (to change it from factor to numeric).
+
+names(comprobacion_precio)[4]<-"total_paid_orders_dataset"
+
+names(comprobacion_precio)[5]<-"total_paid_lineitems_dataset"
+
+comprobacion_precio$total_paid_orders_dataset <- as.numeric(gsub(",", ".", gsub("\\.", "", comprobacion_precio$total_paid_orders_dataset)))
+
+# All NA values are removed.
+
+comprobacion_precio <- comprobacion_precio[complete.cases(comprobacion_precio), ]
+
+# The price diference is calculadted.
+
+comprobacion_precio$price_diference <- as.numeric((comprobacion_precio$total_paid_orders_dataset - comprobacion_precio$total_paid_lineitems_dataset))
+
+# The new column is rounded by 2 decimals.
+
+comprobacion_precio [,7] <-round(comprobacion_precio[,7],2)
+
+```
+
+
+Some charts are created to visualize de price difference between data sets.
+
+```{r,eval=TRUE,echo=FALSE}
+
+# Some charts are created to visualize de price difference.
+
+comprobacion_precio_2 <- comprobacion_precio
+
+boxplot(comprobacion_precio_2$price_diference)
+
+summary(comprobacion_precio_2$price_diference)
+
+comprobacion_precio_2$price_diference <- as.factor(comprobacion_precio_2$price_diference)
+
+```
+
+As could be seen in the boxplot and the summary above, the 75% of the values are between 0 and 6,99 $, which means that these price differences between both data sets could be because of some factors like shipping costs, discounts or some taxes. A better understanding of these diferences can be seen in the next chart.
+
+```{r,eval=TRUE,echo=FALSE,fig.height=11,fig.width=9}
+
+ggplot(comprobacion_precio_2, aes(x=price_diference)) + geom_bar(stat = "count", color="black", fill="steelblue") + ggtitle("Price diferences between orders and lineitems data set ")  + coord_flip()
+
+
+```
+
+
+Now, it will be found the total number of transactions by state of each order.
+
+```{r,eval=TRUE,echo=FALSE}
+
+# Find the total number of transactions we have. ####
+
+orders_trans_2_ordenado <- as.data.frame(orders_trans_2[order(orders_trans_2$id_order),])
+
+orders_trans_2_ordenado$id_order <- as.factor(orders_trans_2_ordenado$id_order)
+
+orders_trans_2_ordenado_id <-  orders_trans_2_ordenado %>% distinct(id_order)
+
+
+orders_translated_number_transactions <- table(orders_translated$state)
+
+orders_translated_number_transactions <- as.data.frame(orders_translated_number_transactions)
+
+names(orders_translated_number_transactions) [1] <- "state"
+
+names(orders_translated_number_transactions) [2] <- "number_of_orders"
+
+orders_translated_percentage <- orders_translated_number_transactions %>% group_by(state) %>% summarize (number_of_orders) %>% mutate(pct = number_of_orders/sum(number_of_orders))
+
+
+```
+
+In the next chart can be seen the percentage of orders by its state.
+
+```{r,eval=TRUE,echo=FALSE,fig.height=11,fig.width=9}
+
+ggplot(orders_translated_percentage, aes(state, pct, fill=state)) + geom_bar(stat='identity') + geom_text(aes(label=scales::percent(pct)), position = position_stack(vjust = .5))+ scale_y_continuous(labels = scales::percent) + ggtitle("Orders made in the online shop ", subtitle= "Proportion of orders by State of the orders")
+
+```
+
+
+The order id for each transaction is found using the following process:
+
+```{r,eval=TRUE,echo=FALSE}
+                              
+# Find the order id for each transaction. ####
+
+trans_with_id <- trans
+
+trans_with_id$id_order <- orders_trans_2_ordenado_id$id_order
+
+trans_with_id <- trans_with_id[,c(14,1:13)]
+
+head(trans_with_id)
+
+```
+
+
+******
+## The Top 10 products in Blackwell (by income provided to the company).
+******
+
+```{r,eval=TRUE,echo=FALSE}
+                              
+top10 <- orders_trans_2 %>% group_by(sku) %>% mutate(total = sum(unit_price))
+
+top10_2 <- distinct(top10, sku, .keep_all = TRUE)
+
+
+
+```
+
+
+******
+# 2on Epic: Data Quality Analyisis.
+******
+
+
+```{r,eval=TRUE,echo=FALSE}
+
+trans_epic2<- read.transactions("trans.csv" , sep=",", format = "basket", rm.duplicates=TRUE)
+
+# In the next summary it can be seen the most frequent items and the distributions of the basket.
+
+summary(trans_epic2)
+
+# You can view the transactions. To visualize certain number of transactions, the brackets must be used. In the next example, it will be visualized the item in the line 10 of the data and the lines 10 to 12.
+
+inspect(trans_epic2[10])
+
+inspect(trans_epic2[10:12])
+
+# Number of transactions.
+
+length(trans_epic2)
+
+# Number of items per transaction
+
+size(trans_epic2)
+
+# Lists the transactions by conversion (LIST must be capitalized)
+
+LIST(trans_epic2)
+
+# To see the item labels
+
+itemLabels(trans_epic2)
+
+
+```
+
+As a result of the analysis made above, it can be extracted some ideas about the data basket structure:
+
+1. The most frequent items and their number of times that they were purchased are:
+
+* APP0692: 290
+* APP1184: 283
+* SAM0068: 214
+* APP1208: 210
+* WDT0177: 185
+
+2. The most common amount of items is 7 items, the least common is 13 items.
+
+3. The average amount of items is 2,50 items.
+
+
+******
+## Data Visualization.
+******
+
+
+A plot with the absolute frequency of each product is created:
+
+```{r,eval=TRUE,echo=FALSE,fig.height=11,fig.width=9}
+
+itemFrequencyPlot(trans_epic2, type = "relative", topN= 20, population=trans_epic2, lift= FALSE)
+
+```
+
+
+TIP:
+You will need to use the image function's parameters because the dataset is large. Consider thinking about these questions when plotting: Is there a way to only plot a certain number of transactions? Is there a way to plot using certain metrics? Which plots might provide the most insight?
+
+
+```{r,eval=TRUE,echo=FALSE,fig.height=11,fig.width=9}
+
+image(trans_epic2[1:300])
+
+```
+
+
+
+Since is known that the data has a length of 10.453 transactions, it could be interesting to take a sample of around the 3% of the total amount of transactions in order to get a first idea of the possible existence of some purchasing patterns.
+
+
+```{r,eval=TRUE,echo=FALSE,fig.height=11,fig.width=9}
+
+image(sample(trans_epic2,300))
+
+```
+
+
+Finally, image() can be used to produce a level plot of an itemMatrix which is useful for quick
+visual inspection. For transaction data sets (e.g., point-of-sale data) such a plot can be very
+helpful for checking whether the data set contains structural changes (e.g., items were not
+offered or out-of-stock during part of the observation period) or to find abnormal transactions
+(e.g., transactions which contain almost all items may point to recording problems). Spotting
+such problems in the data can be very helpful for data preparation.
+
+
+******
+## The Apriori Algorithm is executed over the data.
+******
+
+The followings parameters are requesting that the rules cover 0,1% of the transactions and are 50% correct.
+
+```{r,eval=TRUE,echo=FALSE}
+
+rules<- apriori(trans_epic2, parameter = list(supp = 0.001, conf = 0.5))
+
+inspect(rules, ruleSep = "---->", itemSep = " + ", setStart = "", setEnd ="", linebreak = FALSE)
+
+p <- inspect(rules)
+
+plot(rules)
+
+# Interactive chart to visualize rules.
+
+sel <- plot(rules, measure=c("support", "lift"), shading = "confidence", interactive = TRUE)
+
+
+# The following plot represents items and rules as vertices connecting them with directed edges
+
+subrules2 <- head(rules, n = 10, by = "lift")
+
+plot(subrules2, method = "graph")
+
+
+
+
+
+htmlwidgets::saveWidget(p, "arules.html", selfcontained = FALSE)
+browseURL("arules.html")
+
+
+```
+
+
+******
+## Improving the model.
+******
+
+```{r,eval=TRUE,echo=FALSE}
+
+# rules<- apriori(trans_epic2, parameter = list(supp = 0.1, conf = 0.8))
+
+# Support: Indicates that the parameters used must establish rules that cover 10% of the transactions. 
+
+# Confidence: Indicates that the parameters used must establish rules that are 80% correct.
+
+# Lift measures the importance of a rule. A high value for lift strongly indicates that the rule is important. Unlike the Confidence measurement, {Item 1} -> {Item 2} is the same as {Item 2} -> {Item 1} in the context of the lift measurement.
+
+
+# Sorting your rule's by their measurements.
+
+inspect(sort(rules, by = "lift"))
+
+
+# Seeing a specific item's rules.
+
+itemrules <- subset(rules, items %in% "SPH0016")
+
+inspect(itemrules)
+
+
+# Comproving wether there are redundant rules.
+
+is.redundant(rules)
+
+
+# Ploting the rules.
+
+plot(rules[1:5], method="graph", control=list(type="items")) 
+
+```
+
+
+
+******
+# 3er Epic: 3rd delivery: dimension reduction thorugh categories.
+******
+
+```{r,eval=TRUE,echo=FALSE}
+
+products_with_category<- read.csv("products_with_category.csv", sep=",")
+
+trans_epic3<- read.transactions("trans.csv" , sep=",", format = "basket", rm.duplicates=TRUE)
+
+# match2 <- which(trans_epic2@itemInfo$labels == products_with_category$sku)
+
+match2 <- match(trans_epic2@itemInfo$labels, products_with_category$sku)
+ 
+products_with_category_ordered <- products_with_category[match2,]
+
+trans_epic3@itemInfo$categories <-  products_with_category_ordered$manual_categories
+
+# Con aggregate puedo configurar el nivel que va a usar el algoritmo apriori para hacer sus predicciones.
+
+trans_epic4 <- aggregate(trans_epic3, itemInfo(trans_epic3)[["categories"]])
+
+# The apriori Analysis is done again, taking into account the categories.
+
+rules2<- apriori(trans_epic4, parameter = list(supp = 0.04, conf = 0.75, minlen=2))
+
+inspect(rules2, ruleSep = "---->", itemSep = " + ", setStart = "", setEnd ="", linebreak = FALSE)
+
+# Given that the category "accesories" disturbs the results obtained, this category will be removed during the next execution of the apriori algorithm.
+
+rules3<- apriori(trans_epic4, parameter = list(supp = 0.02, conf = 0.75), appearance = list(none = c("accessories")))
+
+inspect(rules3, ruleSep = "---->", itemSep = " + ", setStart = "", setEnd ="", linebreak = FALSE)
+
+inspect(sort(rules3, by="lift"))
+
+
+# The apriori algorithm is modified to get more relevants results for Blackwells Electronics and the "ruleExplorer" function is used. 
+
+rules4 <- apriori(trans_epic4, parameter=list (supp=0.000001,conf = 0.00001), appearance = list (lhs="smartphone"), control = list (verbose=F))
+
+rules5 <- apriori(trans_epic4, parameter=list (supp=0.000001,conf = 0.00001), appearance = list (none = c("accessories"), lhs="smartphone"), control = list (verbose=F)) 
+
+ruleExplorer(rules4)
+
+
+# Checking the most frequent products in the transaction matrix.
+
+itms <- itemFrequency(trans_epic4, type = "absolute")
+
+head(sort(itms, decreasing = TRUE), n = 20)
+
+barplot(itms)
+
+
+# Introduction of product translated.
+
+products_translated<- read.csv("products_translated.csv", sep=",")
+products_translated<- products_translated [,1:3]
+products_translated<- products_translated [,-2]
+
+match3 <- match(trans_epic2@itemInfo$labels, products_translated$sku)
+products_translated_ordered <- products_translated[match3,]
+
+
+
+# Create a process based in a for loop to add the Brand Name to each category.
+
+trade_mark <- substr(products_translated_ordered$sku,1,3)
+
+products_with_category_ordered_2 <- products_with_category_ordered
+
+products_with_category_ordered_2$trade_mark <- trade_mark
+
+products_with_category_ordered_2$trade_mark_full <- as.character(c("Unknown_Brand"))
+
+products_with_category_ordered_2$trade_mark <- ifelse(is.na(products_with_category_ordered_2$trade_mark), 'TEMPORAL', products_with_category_ordered_2$trade_mark)
+
+products_with_category_ordered_2$manual_categories <- as.character(products_with_category_ordered_2$manual_categories)
+
+products_with_category_ordered_2$manual_categories <- ifelse(is.na(products_with_category_ordered_2$manual_categories), 'NO_DATA', products_with_category_ordered_2$manual_categories)
+
+
+for (row in 1:nrow(products_with_category_ordered_2)) {
+    if(products_with_category_ordered_2[row,3]=="8MO"){products_with_category_ordered_2[row,4]<- c("8Mobility")
+ } else if (products_with_category_ordered_2[row,3]=="ACM") {products_with_category_ordered_2[row,4]<- c("Acme")
+ } else if (products_with_category_ordered_2[row,3]=="ADN") {products_with_category_ordered_2[row,4]<- c("Adonit")
+ } else if (products_with_category_ordered_2[row,3]=="AII") {products_with_category_ordered_2[row,4]<- c("Aiino")
+ } else if (products_with_category_ordered_2[row,3]=="AKI") {products_with_category_ordered_2[row,4]<- c("Akitio")
+ } else if (products_with_category_ordered_2[row,3]=="ALL") {products_with_category_ordered_2[row,4]<- c("Allocacoc")
+ } else if (products_with_category_ordered_2[row,3]=="AP2") {products_with_category_ordered_2[row,4]<- c("Apple_Second_Hand")
+ } else if (products_with_category_ordered_2[row,3]=="APP") {products_with_category_ordered_2[row,4]<- c("Apple_Brand_New")
+ } else if (products_with_category_ordered_2[row,3]=="BAN") {products_with_category_ordered_2[row,4]<- c("Apple_Panama")
+ } else if (products_with_category_ordered_2[row,3]=="BEA") {products_with_category_ordered_2[row,4]<- c("BeatsX")
+ } else if (products_with_category_ordered_2[row,3]=="BEL") {products_with_category_ordered_2[row,4]<- c("Belkin")
+ } else if (products_with_category_ordered_2[row,3]=="BEZ") {products_with_category_ordered_2[row,4]<- c("Beez")
+ } else if (products_with_category_ordered_2[row,3]=="BLL") {products_with_category_ordered_2[row,4]<- c("Blue_Lounge")
+ } else if (products_with_category_ordered_2[row,3]=="BLM") {products_with_category_ordered_2[row,4]<- c("Blue")
+ } else if (products_with_category_ordered_2[row,3]=="BNQ") {products_with_category_ordered_2[row,4]<- c("BenQ")
+ } else if (products_with_category_ordered_2[row,3]=="BOD") {products_with_category_ordered_2[row,4]<- c("BodyGuardz")
+ } else if (products_with_category_ordered_2[row,3]=="BOO") {products_with_category_ordered_2[row,4]<- c("Booq")
+ } else if (products_with_category_ordered_2[row,3]=="BOS") {products_with_category_ordered_2[row,4]<- c("Bose")
+ } else if (products_with_category_ordered_2[row,3]=="BTC") {products_with_category_ordered_2[row,4]<- c("Boostcase")
+ } else if (products_with_category_ordered_2[row,3]=="CAI") {products_with_category_ordered_2[row,4]<- c("Casetify")
+ } else if (products_with_category_ordered_2[row,3]=="CEL") {products_with_category_ordered_2[row,4]<- c("Celly")
+ } else if (products_with_category_ordered_2[row,3]=="COG") {products_with_category_ordered_2[row,4]<- c("Cogito")
+ } else if (products_with_category_ordered_2[row,3]=="CRU") {products_with_category_ordered_2[row,4]<- c("Crucial")
+ } else if (products_with_category_ordered_2[row,3]=="CYB") {products_with_category_ordered_2[row,4]<- c("CyberPower")
+ } else if (products_with_category_ordered_2[row,3]=="CYG") {products_with_category_ordered_2[row,4]<- c("Cygnett")
+ } else if (products_with_category_ordered_2[row,3]=="DEV") {products_with_category_ordered_2[row,4]<- c("Devolo")
+ } else if (products_with_category_ordered_2[row,3]=="DJI") {products_with_category_ordered_2[row,4]<- c("DJI")
+ } else if (products_with_category_ordered_2[row,3]=="DLK") {products_with_category_ordered_2[row,4]<- c("D-Link")
+ } else if (products_with_category_ordered_2[row,3]=="DLL") {products_with_category_ordered_2[row,4]<- c("Dell")
+ } else if (products_with_category_ordered_2[row,3]=="DOD") {products_with_category_ordered_2[row,4]<- c("Dodocool")
+ } else if (products_with_category_ordered_2[row,3]=="DRO") {products_with_category_ordered_2[row,4]<- c("Drobo")
+ } else if (products_with_category_ordered_2[row,3]=="DVI") {products_with_category_ordered_2[row,4]<- c("Devia")
+ } else if (products_with_category_ordered_2[row,3]=="EIZ") {products_with_category_ordered_2[row,4]<- c("Eizo")
+ } else if (products_with_category_ordered_2[row,3]=="ELA") {products_with_category_ordered_2[row,4]<- c("Elago")
+ } else if (products_with_category_ordered_2[row,3]=="ELE") {products_with_category_ordered_2[row,4]<- c("Elevation_Apple")
+ } else if (products_with_category_ordered_2[row,3]=="ELG") {products_with_category_ordered_2[row,4]<- c("Elgato")
+ } else if (products_with_category_ordered_2[row,3]=="EVU") {products_with_category_ordered_2[row,4]<- c("Evutec")
+ } else if (products_with_category_ordered_2[row,3]=="FCM") {products_with_category_ordered_2[row,4]<- c("FCM")
+ } else if (products_with_category_ordered_2[row,3]=="FIB") {products_with_category_ordered_2[row,4]<- c("Fibaro")
+ } else if (products_with_category_ordered_2[row,3]=="FIF") {products_with_category_ordered_2[row,4]<- c("Fitbit")
+ } else if (products_with_category_ordered_2[row,3]=="GAM") {products_with_category_ordered_2[row,4]<- c("Gamevice")
+ } else if (products_with_category_ordered_2[row,3]=="GLY") {products_with_category_ordered_2[row,4]<- c("Glyph")
+ } else if (products_with_category_ordered_2[row,3]=="GOP") {products_with_category_ordered_2[row,4]<- c("GoPro")
+ } else if (products_with_category_ordered_2[row,3]=="GRT") {products_with_category_ordered_2[row,4]<- c("Griffin")
+ } else if (products_with_category_ordered_2[row,3]=="GTE") {products_with_category_ordered_2[row,4]<- c("G_Technology")
+ } else if (products_with_category_ordered_2[row,3]=="HAR") {products_with_category_ordered_2[row,4]<- c("Harman")
+ } else if (products_with_category_ordered_2[row,3]=="HGD") {products_with_category_ordered_2[row,4]<- c("Henge_Docks")
+ } else if (products_with_category_ordered_2[row,3]=="HGS") {products_with_category_ordered_2[row,4]<- c("HGST_Travelstar")
+ } else if (products_with_category_ordered_2[row,3]=="HIC") {products_with_category_ordered_2[row,4]<- c("Hitcase")
+ } else if (products_with_category_ordered_2[row,3]=="HOC") {products_with_category_ordered_2[row,4]<- c("	Nike_hoco_Apple")
+ } else if (products_with_category_ordered_2[row,3]=="HOW") {products_with_category_ordered_2[row,4]<- c("Honeywell")
+ } else if (products_with_category_ordered_2[row,3]=="HTE") {products_with_category_ordered_2[row,4]<- c("Hyper")
+ } else if (products_with_category_ordered_2[row,3]=="IAM") {products_with_category_ordered_2[row,4]<- c("I_AM")
+ } else if (products_with_category_ordered_2[row,3]=="ICA") {products_with_category_ordered_2[row,4]<- c("Incase")
+ } else if (products_with_category_ordered_2[row,3]=="IFR") {products_with_category_ordered_2[row,4]<- c("iFrogz")
+ } else if (products_with_category_ordered_2[row,3]=="IFX") {products_with_category_ordered_2[row,4]<- c("iFixit")
+ } else if (products_with_category_ordered_2[row,3]=="IHE") {products_with_category_ordered_2[row,4]<- c("iHealth")
+ } else if (products_with_category_ordered_2[row,3]=="IKM") {products_with_category_ordered_2[row,4]<- c("IK_Multimedia")
+ } else if (products_with_category_ordered_2[row,3]=="IOT") {products_with_category_ordered_2[row,4]<- c("iOttie")
+ } else if (products_with_category_ordered_2[row,3]=="JAB") {products_with_category_ordered_2[row,4]<- c("Jabra")
+ } else if (products_with_category_ordered_2[row,3]=="JAW") {products_with_category_ordered_2[row,4]<- c("Jawbone")
+ } else if (products_with_category_ordered_2[row,3]=="JBL") {products_with_category_ordered_2[row,4]<- c("JBL")
+ } else if (products_with_category_ordered_2[row,3]=="JMO") {products_with_category_ordered_2[row,4]<- c("Just_Mobile")
+ } else if (products_with_category_ordered_2[row,3]=="JOB") {products_with_category_ordered_2[row,4]<- c("Joby")
+ } else if (products_with_category_ordered_2[row,3]=="JYB") {products_with_category_ordered_2[row,4]<- c("Jaybird")
+ } else if (products_with_category_ordered_2[row,3]=="KAI") {products_with_category_ordered_2[row,4]<- c("Kaiser")
+ } else if (products_with_category_ordered_2[row,3]=="KAN") {products_with_category_ordered_2[row,4]<- c("Kanex")
+ } else if (products_with_category_ordered_2[row,3]=="KEN") {products_with_category_ordered_2[row,4]<- c("Kensington")
+ } else if (products_with_category_ordered_2[row,3]=="KEU") {products_with_category_ordered_2[row,4]<- c("kenu")
+ } else if (products_with_category_ordered_2[row,3]=="KIN") {products_with_category_ordered_2[row,4]<- c("Kingston")
+ } else if (products_with_category_ordered_2[row,3]=="KOO") {products_with_category_ordered_2[row,4]<- c("Koogeek")
+ } else if (products_with_category_ordered_2[row,3]=="KUA") {products_with_category_ordered_2[row,4]<- c("Kukaclip")
+ } else if (products_with_category_ordered_2[row,3]=="LAC") {products_with_category_ordered_2[row,4]<- c("LaCie")
+ } else if (products_with_category_ordered_2[row,3]=="LAN") {products_with_category_ordered_2[row,4]<- c("LandingZone")
+ } else if (products_with_category_ordered_2[row,3]=="LEE") {products_with_category_ordered_2[row,4]<- c("Leef")
+ } else if (products_with_category_ordered_2[row,3]=="LEX") {products_with_category_ordered_2[row,4]<- c("Lexar")
+ } else if (products_with_category_ordered_2[row,3]=="LGE") {products_with_category_ordered_2[row,4]<- c("LG")
+ } else if (products_with_category_ordered_2[row,3]=="LIF") {products_with_category_ordered_2[row,4]<- c("Lifeproof")
+ } else if (products_with_category_ordered_2[row,3]=="LMP") {products_with_category_ordered_2[row,4]<- c("LMP")
+ } else if (products_with_category_ordered_2[row,3]=="LOG") {products_with_category_ordered_2[row,4]<- c("Logitech")
+ } else if (products_with_category_ordered_2[row,3]=="LUN") {products_with_category_ordered_2[row,4]<- c("Lunatik")
+ } else if (products_with_category_ordered_2[row,3]=="MAC") {products_with_category_ordered_2[row,4]<- c("Macally")
+ } else if (products_with_category_ordered_2[row,3]=="MAK") {products_with_category_ordered_2[row,4]<- c("Maclocks")
+ } else if (products_with_category_ordered_2[row,3]=="MAT") {products_with_category_ordered_2[row,4]<- c("Matias")
+ } else if (products_with_category_ordered_2[row,3]=="MBI") {products_with_category_ordered_2[row,4]<- c("Mobility")
+ } else if (products_with_category_ordered_2[row,3]=="MDT") {products_with_category_ordered_2[row,4]<- c("Mediterrans")
+ } else if (products_with_category_ordered_2[row,3]=="MIC") {products_with_category_ordered_2[row,4]<- c("Microsoft_MAC")
+ } else if (products_with_category_ordered_2[row,3]=="MIN") {products_with_category_ordered_2[row,4]<- c("Minibatt")
+ } else if (products_with_category_ordered_2[row,3]=="MMW") {products_with_category_ordered_2[row,4]<- c("My_MW")
+ } else if (products_with_category_ordered_2[row,3]=="MOL") {products_with_category_ordered_2[row,4]<- c("Moleskine")
+ } else if (products_with_category_ordered_2[row,3]=="MOP") {products_with_category_ordered_2[row,4]<- c("Mophie")
+ } else if (products_with_category_ordered_2[row,3]=="MOS") {products_with_category_ordered_2[row,4]<- c("Moshi")
+ } else if (products_with_category_ordered_2[row,3]=="MOX") {products_with_category_ordered_2[row,4]<- c("Moxie")
+ } else if (products_with_category_ordered_2[row,3]=="MTF") {products_with_category_ordered_2[row,4]<- c("Mistify")
+ } else if (products_with_category_ordered_2[row,3]=="MUJ") {products_with_category_ordered_2[row,4]<- c("Mujjo")
+ } else if (products_with_category_ordered_2[row,3]=="MUV") {products_with_category_ordered_2[row,4]<- c("Muvit")
+ } else if (products_with_category_ordered_2[row,3]=="MYF") {products_with_category_ordered_2[row,4]<- c("MyFox")
+ } else if (products_with_category_ordered_2[row,3]=="NDA") {products_with_category_ordered_2[row,4]<- c("Nonda")
+} else if (products_with_category_ordered_2[row,3]=="NDE") {products_with_category_ordered_2[row,4]<- c("Ndevr")
+} else if (products_with_category_ordered_2[row,3]=="NEA") {products_with_category_ordered_2[row,4]<- c("Netatmo")
+} else if (products_with_category_ordered_2[row,3]=="NES") {products_with_category_ordered_2[row,4]<- c("Nest")
+} else if (products_with_category_ordered_2[row,3]=="NIE") {products_with_category_ordered_2[row,4]<- c("Ninebot")
+} else if (products_with_category_ordered_2[row,3]=="NIM") {products_with_category_ordered_2[row,4]<- c("Nimbus")
+} else if (products_with_category_ordered_2[row,3]=="NKI") {products_with_category_ordered_2[row,4]<- c("Nokia")
+} else if (products_with_category_ordered_2[row,3]=="NOD") {products_with_category_ordered_2[row,4]<- c("Nodon")
+} else if (products_with_category_ordered_2[row,3]=="NOK") {products_with_category_ordered_2[row,4]<- c("Noke")
+} else if (products_with_category_ordered_2[row,3]=="NOM") {products_with_category_ordered_2[row,4]<- c("Nomad")
+} else if (products_with_category_ordered_2[row,3]=="NTE") {products_with_category_ordered_2[row,4]<- c("NewerTech")
+} else if (products_with_category_ordered_2[row,3]=="OBL") {products_with_category_ordered_2[row,4]<- c("Oblumi")
+} else if (products_with_category_ordered_2[row,3]=="OLI") {products_with_category_ordered_2[row,4]<- c("Olixar")
+} else if (products_with_category_ordered_2[row,3]=="OLL") {products_with_category_ordered_2[row,4]<- c("Olloclip")
+} else if (products_with_category_ordered_2[row,3]=="OPU") {products_with_category_ordered_2[row,4]<- c("Opulus")
+} else if (products_with_category_ordered_2[row,3]=="OSM") {products_with_category_ordered_2[row,4]<- c("Osmo")
+} else if (products_with_category_ordered_2[row,3]=="OTR") {products_with_category_ordered_2[row,4]<- c("Startech")
+} else if (products_with_category_ordered_2[row,3]=="OTT") {products_with_category_ordered_2[row,4]<- c("OtterBox ")
+} else if (products_with_category_ordered_2[row,3]=="OWC") {products_with_category_ordered_2[row,4]<- c("OWC")
+} else if (products_with_category_ordered_2[row,3]=="PAC") {products_with_category_ordered_2[row,4]<- c("Packs")
+} else if (products_with_category_ordered_2[row,3]=="PAR") {products_with_category_ordered_2[row,4]<- c("Parrot")
+} else if (products_with_category_ordered_2[row,3]=="PEB") {products_with_category_ordered_2[row,4]<- c("Pebble")
+} else if (products_with_category_ordered_2[row,3]=="PHI") {products_with_category_ordered_2[row,4]<- c("Philips")
+} else if (products_with_category_ordered_2[row,3]=="PIE") {products_with_category_ordered_2[row,4]<- c("Pieza_Apple")
+} else if (products_with_category_ordered_2[row,3]=="PLA") {products_with_category_ordered_2[row,4]<- c("Plantronic")
+} else if (products_with_category_ordered_2[row,3]=="POL") {products_with_category_ordered_2[row,4]<- c("Polaroid")
+} else if (products_with_category_ordered_2[row,3]=="PQI") {products_with_category_ordered_2[row,4]<- c("Pqi")
+} else if (products_with_category_ordered_2[row,3]=="PRO") {products_with_category_ordered_2[row,4]<- c("Promise")
+} else if (products_with_category_ordered_2[row,3]=="PRY") {products_with_category_ordered_2[row,4]<- c("Prynt")
+} else if (products_with_category_ordered_2[row,3]=="PUR") {products_with_category_ordered_2[row,4]<- c("Puro")
+} else if (products_with_category_ordered_2[row,3]=="QAR") {products_with_category_ordered_2[row,4]<- c("Qardio")
+} else if (products_with_category_ordered_2[row,3]=="QDO") {products_with_category_ordered_2[row,4]<- c("QDos")
+} else if (products_with_category_ordered_2[row,3]=="QNA") {products_with_category_ordered_2[row,4]<- c("QNAP")
+} else if (products_with_category_ordered_2[row,3]=="RAI") {products_with_category_ordered_2[row,4]<- c("RainDesign")
+} else if (products_with_category_ordered_2[row,3]=="REP") {products_with_category_ordered_2[row,4]<- c("Reparacion_Apple")
+} else if (products_with_category_ordered_2[row,3]=="RET") {products_with_category_ordered_2[row,4]<- c("Retrak")
+} else if (products_with_category_ordered_2[row,3]=="RUT") {products_with_category_ordered_2[row,4]<- c("Runtastic")
+} else if (products_with_category_ordered_2[row,3]=="RYV") {products_with_category_ordered_2[row,4]<- c("Ryval")
+} else if (products_with_category_ordered_2[row,3]=="SAM") {products_with_category_ordered_2[row,4]<- c("Samsung")
+} else if (products_with_category_ordered_2[row,3]=="SAN") {products_with_category_ordered_2[row,4]<- c("Sandisk ")
+} else if (products_with_category_ordered_2[row,3]=="SAT") {products_with_category_ordered_2[row,4]<- c("Satechi")
+} else if (products_with_category_ordered_2[row,3]=="SDE") {products_with_category_ordered_2[row,4]<- c("SDesign")
+} else if (products_with_category_ordered_2[row,3]=="SEA") {products_with_category_ordered_2[row,4]<- c("Seagate")
+} else if (products_with_category_ordered_2[row,3]=="SEV") {products_with_category_ordered_2[row,4]<- c("Servicio_Apple")
+} else if (products_with_category_ordered_2[row,3]=="SHE") {products_with_category_ordered_2[row,4]<- c("SwitchEasy")
+} else if (products_with_category_ordered_2[row,3]=="SNA") {products_with_category_ordered_2[row,4]<- c("Sena")
+} else if (products_with_category_ordered_2[row,3]=="SNN") {products_with_category_ordered_2[row,4]<- c("Sonnet")
+} else if (products_with_category_ordered_2[row,3]=="SNS") {products_with_category_ordered_2[row,4]<- c("Sonos")
+} else if (products_with_category_ordered_2[row,3]=="SOF") {products_with_category_ordered_2[row,4]<- c("Parallels")
+} else if (products_with_category_ordered_2[row,3]=="SPE") {products_with_category_ordered_2[row,4]<- c("Speck")
+} else if (products_with_category_ordered_2[row,3]=="SPH") {products_with_category_ordered_2[row,4]<- c("Sphero")
+} else if (products_with_category_ordered_2[row,3]=="SSE") {products_with_category_ordered_2[row,4]<- c("Sen.se")
+} else if (products_with_category_ordered_2[row,3]=="STA") {products_with_category_ordered_2[row,4]<- c("StarTech")
+} else if (products_with_category_ordered_2[row,3]=="STC") {products_with_category_ordered_2[row,4]<- c("Stacked")
+} else if (products_with_category_ordered_2[row,3]=="STI") {products_with_category_ordered_2[row,4]<- c("Stil")
+} else if (products_with_category_ordered_2[row,3]=="STK") {products_with_category_ordered_2[row,4]<- c("Stikgo")
+} else if (products_with_category_ordered_2[row,3]=="STM") {products_with_category_ordered_2[row,4]<- c("STM")
+} else if (products_with_category_ordered_2[row,3]=="SXA") {products_with_category_ordered_2[row,4]<- c("SecurityXtra")
+} else if (products_with_category_ordered_2[row,3]=="SYN") {products_with_category_ordered_2[row,4]<- c("Synology")
+} else if (products_with_category_ordered_2[row,3]=="TAD") {products_with_category_ordered_2[row,4]<- c("Tado")
+} else if (products_with_category_ordered_2[row,3]=="TAM") {products_with_category_ordered_2[row,4]<- c("Tangram")
+} else if (products_with_category_ordered_2[row,3]=="TCH") {products_with_category_ordered_2[row,4]<- c("Tech21")
+} else if (products_with_category_ordered_2[row,3]=="THU") {products_with_category_ordered_2[row,4]<- c("Thule")
+} else if (products_with_category_ordered_2[row,3]=="TIG") {products_with_category_ordered_2[row,4]<- c("Tigra")
+} else if (products_with_category_ordered_2[row,3]=="TIL") {products_with_category_ordered_2[row,4]<- c("Tile")
+} else if (products_with_category_ordered_2[row,3]=="TOS") {products_with_category_ordered_2[row,4]<- c("Toshiba")
+} else if (products_with_category_ordered_2[row,3]=="TPL") {products_with_category_ordered_2[row,4]<- c("TP_Link")
+} else if (products_with_category_ordered_2[row,3]=="TRA") {products_with_category_ordered_2[row,4]<- c("Transcend")
+} else if (products_with_category_ordered_2[row,3]=="TRI") {products_with_category_ordered_2[row,4]<- c("Tribe")
+} else if (products_with_category_ordered_2[row,3]=="TRK") {products_with_category_ordered_2[row,4]<- c("TrackR")
+} else if (products_with_category_ordered_2[row,3]=="TRN") {products_with_category_ordered_2[row,4]<- c("Trunk")
+} else if (products_with_category_ordered_2[row,3]=="TUC") {products_with_category_ordered_2[row,4]<- c("Tucano")
+} else if (products_with_category_ordered_2[row,3]=="TWS") {products_with_category_ordered_2[row,4]<- c("Twelve_South")
+} else if (products_with_category_ordered_2[row,3]=="UAG") {products_with_category_ordered_2[row,4]<- c("Urban_Armor_Gear")
+} else if (products_with_category_ordered_2[row,3]=="WAC") {products_with_category_ordered_2[row,4]<- c("Wacom")
+} else if (products_with_category_ordered_2[row,3]=="WDT") {products_with_category_ordered_2[row,4]<- c("Western_Digital ")
+} else if (products_with_category_ordered_2[row,3]=="WHO") {products_with_category_ordered_2[row,4]<- c("Whoosh")
+} else if (products_with_category_ordered_2[row,3]=="WIK") {products_with_category_ordered_2[row,4]<- c("Wikango")
+} else if (products_with_category_ordered_2[row,3]=="WIT") {products_with_category_ordered_2[row,4]<- c("Withings")
+} else if (products_with_category_ordered_2[row,3]=="WOE") {products_with_category_ordered_2[row,4]<- c("Wowewa")
+} else if (products_with_category_ordered_2[row,3]=="XDO") {products_with_category_ordered_2[row,4]<- c("XDoria_Apple")
+} else if (products_with_category_ordered_2[row,3]=="XOO") {products_with_category_ordered_2[row,4]<- c("Xoopar ")
+} else if (products_with_category_ordered_2[row,3]=="XRI") {products_with_category_ordered_2[row,4]<- c("X-Rite")
+} else if (products_with_category_ordered_2[row,3]=="XTO") {products_with_category_ordered_2[row,4]<- c("Xtorm")
+} else if (products_with_category_ordered_2[row,3]=="ZAG") {products_with_category_ordered_2[row,4]<- c("Zagg ")
+} else if (products_with_category_ordered_2[row,3]=="ZEP") {products_with_category_ordered_2[row,4]<- c("Zeep")
+} else if (products_with_category_ordered_2[row,3]=="TEMPORAL") {products_with_category_ordered_2[row,4]<- c("Unknown_Category_Brand")
+} else products_with_category_ordered_2[row,4]<- c("Unknown_Brand")
+ }
+
+products_with_category_ordered_2$category_brand <- as.character(c("nada")) 
+
+products_with_category_ordered_2$category_brand <- paste(products_with_category_ordered_2$manual_categories, products_with_category_ordered_2$trade_mark_full, sep="-")
+
+products_with_category_ordered_2$category_brand <- as.factor(products_with_category_ordered_2$category_brand)
+  
+
+
+# Now, a new transaction elements is created adding the new level based on category-brand.
+
+trans_epic5 <- trans_epic3
+  
+trans_epic5@itemInfo$category_brand <- products_with_category_ordered_2$category_brand
+
+trans_epic5 <- aggregate(trans_epic5, itemInfo(trans_epic5)[["category_brand"]])
+
+rules6 <- apriori(trans_epic5, parameter=list (supp=0.000001,conf = 0.00001))
+
+ruleExplorer(rules6)
+
+```
+
+
+
+******
+# K-Means.
+******
+
+```{r,eval=TRUE,echo=FALSE}
+
+# Sara: para convertir una matrix de transacciones en un data set: ####
+
+# nuevo <- as(trans_epic5, "matrix")
+
+# nuevo <- as.data.frame(nuevo)
+
+# match_total <- which(orders_dos_mas$id_order %in% lineitems$id_order)
+
+# orders_full <- lineitems [match,]
+
+
+orders_uno <- lineitems %>% group_by(id_order) %>% filter (n() == 1)
+
+match_total <- which(orders_uno$id_order %in% Orders_completed$id_order)
+
+orders_uno_trans <- orders_uno[match_total,]
+
+orders_uno_trans$unit_price <- as.numeric(gsub(",", ".", gsub("\\.", "", orders_uno_trans$unit_price)))
+
+orders_uno_trans$sku <- as.factor(orders_uno_trans$sku)
+
+orders_uno_trans <- orders_uno_trans %>% group_by(sku) %>% summarize(count_uno = n())
+
+orders_numerador <- orders_trans %>% group_by(sku) %>% summarize(count_dos_mas = n())
+
+match_social <- match(orders_uno_trans$sku, orders_numerador$sku)
+
+orders_numerador_unir <- orders_numerador[match_social,]
+
+orders_social_final <- orders_uno_trans
+
+orders_social_final$numerador <- orders_numerador_unir$count_dos_mas
+
+orders_social_final$numerador <- orders_social_final$numerador
+
+orders_social_final[is.na(orders_social_final)] <- 0
+
+orders_social_final$sociability <- as.numeric(orders_social_final$numerador/orders_social_final$count_uno)
+
+orders_social_final[is.na(orders_social_final)] <- 0
+
+
+
+# Ibai Tehory
+
+full_join_social <- full_join(x=orders_uno_trans, y= orders_numerador, by= "sku")
+
+full_join_social <- full_join_social[,c(1,3,2)]
+
+full_join_social$count_dos_mas[is.na(full_join_social$count_dos_mas)] <- 0
+
+full_join_social$sociability <- as.numeric(full_join_social$count_dos_mas/full_join_social$count_uno)
+
+full_join_social$sociability[is.na(full_join_social$sociability)] <- 70
+
+
+rapid_miner  <- full_join_social
+
+rapid_miner <- full_join_social[,-c(2:3)]
+
+
+# Adding price.
+
+lineitems$unit_price <- as.numeric(gsub(",", ".", gsub("\\.", "", lineitems$unit_price)))
+
+price <- lineitems %>% group_by(sku) %>% summarize(precio= mean(unit_price))
+
+rapid_miner_2 <- left_join(rapid_miner,price, by= "sku")
+
+
+# Adding Category.
+
+match_category <- match(rapid_miner_2$sku ,products_with_category$sku)
+  
+products_with_category_rapid_miner <- products_with_category[match_category,]
+
+rapid_miner_2$category <- products_with_category_rapid_miner$manual_categories
+
+rapid_miner_3 <- rapid_miner_2[complete.cases(rapid_miner_2), ]
+
+
+# Dani variables.
+
+para_cluster <- lineitems %>% group_by(sku) %>% summarise(apariciones = n(),
+                                     media_repe = mean(product_quantity),
+                                     total_vendido_qa = sum(product_quantity),
+                                     transacciones = length(unique(id_order))) %>%
+                           mutate(total_vendido = apariciones * media_repe)
+
+
+match_cluster <- match(rapid_miner_3$sku,para_cluster$sku)
+
+para_cluster_2 <- para_cluster[match_cluster,]
+
+rapid_miner_3$apariciones<- para_cluster_2$apariciones
+
+rapid_miner_3$media_repe<- para_cluster_2$media_repe
+
+rapid_miner_3$total_vendido <- para_cluster_2$total_vendido
+
+rapid_miner_4 <- rapid_miner_3[complete.cases(rapid_miner_3), ]
+
+
+
+
+
+
+
+
+match2 <- match(trans_epic2@itemInfo$labels, products_with_category$sku)
+ 
+products_with_category_ordered <- products_with_category[match2,]
+
+trans_epic3@itemInfo$categories <-  products_with_category_ordered$manual_categories
+
+
+
+# Sku, price, time sold, sociability rate. The goal is to find numero de centroides que creemos que divide todo el espacio bien. El numeor de cntroides relevantes ees igual al numero de centros que tiene al menos una dimension. K= numerode clusters. 
+
+
+#Are there any interesting patterns or item relationships within Electronidex's transactions?
+
+# Would Blackwell benefit from selling any of Electronidex's items?
+# Which 10 products from Electrodinex are most proffitable and have higher corss-selling # possibilities.
+
+# Once you've completed your market basket analysis, please put together a formal business report in Word. Thank you in advance!
+
+
+
+
+
+# itemInfo(trans_epic3) <- data.frame(level1 =products_with_category_ordered$manual_categories)
+
+
+
+
+
+
+
+---------------
+
+labels_2 <- as.data.frame(trans_epic2@itemInfo$labels)
+
+match2 <- match(products_with_category$sku, labels_2$label)
+
+products_with_category_ordered <- products_with_category[match2,]
+  
+  
+
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+df1 <- df1 %>% 
+  group_by(X) %>% 
+  mutate(Y.new = mean(Y))
+
+entire_homes<- lapply(datasets_listing_all, function(x) x %>% filter(room_type == "Entire home/apt") %>% group_by(neighbourhood) %>% summarise(mean=mean(price))))
+
+private_rooms_count<- lapply(datasets_listing_all, function(x) x %>% filter(room_type == "Private room") %>% count(neighbourhood))
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+```
+
+
+```{r,eval=TRUE,echo=FALSE}
+
+# Dummifyin the Data Set ####
+
+data_existing_products <- dummyVars(" ~ .", data = initial_data_existing_products)
+
+existing_products <- data.frame(predict(data_existing_products, newdata = initial_data_existing_products))
+
+# Eliminación de NA attributes. ####
+
+existing_products$BestSellersRank <- NULL
+
+# Correlation Matrix.####
+
+corrData <- cor(existing_products)
+
+corrplot(corrData,   
+           diag=TRUE,type="upper", 
+           title= "Matriz de Correlación  Existing Attributes", tl.cex = 0.5, addCoef.col = "black",
+           number.cex = 0.3 , insig = "blank", mar=c(0,0,1,0))
+
+
+# Data variables filtering.####
+
+existing_products2 <- existing_products[,c(14,16,18,20,21,22,27,28)]
+
+
+# Removing Outliers.
+
+existing_products2 <- existing_products2 [-which((existing_products2$Volume > 6000)),]
+
+existing_products2 <- existing_products2 [-which((existing_products2$Price > 2000)),]
+
+existing_products2 <- existing_products2 [-which((existing_products2$x2StarReviews > 100)),]
+
+existing_products2 <- existing_products2 [-which((existing_products2$PositiveServiceReview > 250)),]
+
+
+# New Correlation Matrix.
+
+corrData_2 <- cor(existing_products2)
+
+corrplot(corrData_2,   
+           diag=TRUE,type="upper", 
+           title= "Matriz de Correlación  New Filtered Attributes", tl.cex = 0.5, addCoef.col = "black",
+           number.cex = 0.3 , insig = "blank", mar=c(0,0,1,0))
+
+
+# Multiple linear Regressions. ####
+
+# Linear Model Construction.
+
+linear_model <- lm(Volume ~ Price + x4StarReviews + x2StarReviews + PositiveServiceReview + NegativeServiceReview + Recommendproduct + ProfitMargin, data=existing_products2)
+
+summary(linear_model)
+
+plot(linear_model)
+
+
+# Data Set Partition ####
+
+inTrain <- createDataPartition(y = existing_products2$Volume, p = .75,list = FALSE)
+
+training <- existing_products2[ inTrain,]
+testing <- existing_products2[-inTrain,]
+
+
+# Making sales volume predictions on the new products dataset.  ####
+
+set.seed(123)
+
+# A train control is used to tune some of the metrics that will be used during the training process.
+
+ctrl2 <- trainControl(method = "boot", number= 1000)
+
+# Se crea un for loop.
+
+a <- c("lm","rf","knn", "svmLinear", "svmRadial")
+
+combined <- c()
+
+
+for (i in a) {
+  fit <- train(Volume ~ .,data = training,method = i, trControl=ctrl2)
+  prediccion <- predict(fit,testing)
+  res <- postResample(pred = prediccion, obs = testing$Volume)
+  
+ combined <- cbind(res,combined)
+ 
+    }
+
+  colnames(combined) <- c("svmRadial","svmLinear","knn","rf","lm")
+  
+
+  print(combined)
+  
+  
+
+# Se visualizan los resultados de forma gráfica.
+  
+melt_combined <- melt(combined)
+
+ggplot(melt_combined, aes(x=Var2, y=value))+ geom_col(stat="identity", color="black") +
+ facet_wrap(Var2~., scales="free") +labs(title="Models Comparison") + xlab("Model") + ylab("Value")
+
+
+# SVM Linear Manual.####
+
+fit_svm <- train(Volume ~ .,data = training,method = "svmLinear", trControl=ctrl2)
+
+Predicciones_svmlinear_exp <- predict(fit_svm,newdata = testing)
+
+postResample(pred = Predicciones_svmlinear_exp, obs = testing$Volume)
+
+testing_exp <- testing
+
+
+
+# Plotting the Relative Error.
+
+testing_exp$Volume_predicted <- Predicciones_svmlinear_exp
+
+testing_exp$relative_error <- ((abs(testing_exp$Volume - testing_exp$Volume_predicted )))/testing_exp$Volume
+
+ggplot(testing_exp, aes(x=Volume, y=relative_error)) + geom_point() + ylab("Relative Error") + labs(title="Plotted Relative Error")
+
+
+
+# Making Predictions over the new data set.####
+
+Predicciones_svmlinear <- predict(fit_svm,newdata = new_products)
+
+summary(Predicciones_svmlinear)
+
+new_products2 <- new_products
+
+new_products2$results <- Predicciones_svmlinear
+
+new_products3 <- new_products2[which(new_products2$ProductType=="PC"| new_products2$ProductType=="Laptop" | new_products2$ProductType=="Netbook" | new_products2$ProductType=="Smartphone"),]
+
+new_products3_chart <- new_products3[,c(1,2,19)]
+
+
+ggplot(new_products3_chart, aes(y=results, x=factor(ProductNum), color=ProductType, fill=ProductType)) + 
+    geom_bar(position="dodge", stat="identity", color="black") + labs(title="Predicted Sales") +   
+    facet_grid(~ProductType, scales="free_x") + xlab("Product Number") + ylab("Predicted Sales")
+
+
+```
+
+
+
